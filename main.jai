@@ -21,8 +21,15 @@ mnist_image :: () {
     image[i] = clamp((xx buffer[i]) / 256.0, 0.0, 1.0);
   }
 
+  t := get_time();
   results := forward_propagate_cpu(image);
-  print("%\n", results);
+  t = get_time() - t;
+  print("%. time taken: %\n", results, t);
+
+  t = get_time();
+  results = forward_propagate_sse(image);
+  t = get_time() - t;
+  print("%. time taken: %\n", results, t);
   stbi_image_free(data);
 }
 
@@ -49,26 +56,70 @@ compute_flag :: enum {
   cpu;
   sse;
   avx2;
-  // avx512
 }
 
 forward_propagate_sse :: (image: [784] float) -> [10] float {
+  defer print("forward_propagate_sse\n");
   using mnist_model;
   buffer1: [512] float;
   outputs: [10]  float;
 
+  // forward propagation for layer 1.
   for i: 0..511 {
-
-
+    sum: float = 0;
+    image_data := image.data;
+    layer1_data := layer1[i].data;
+    for j: 0..195 {
+      val: float = 0;
+      #asm SSE {
+        movups.x xmm0: vec, [image_data];
+        dpps.x   xmm0, [layer1_data], 0xF1;
+        movq     val, xmm0;
+        add image_data, 16;
+        add layer1_data, 16;
+      }
+      sum += val;
+    }
+    buffer1[i] = sum + biases1[i];
   }
 
+  // relu for layer 1.
+  buf := buffer1.data;
+  for i: 0..127 {
+    #asm SSE {
+      movups.x xmm1: vec, [buf];
+      pxor.x   xmm2: vec, xmm2;
+      maxps.x  xmm1, xmm2;
+      movups.x [buf], xmm1;
+      add buf, 16;
+    }
+  }
 
+  // forward propagation for layer 2
+  for i: 0..9 {
+    sum: float = 0;
+    buf := buffer1.data;
+    layer2_data := layer2[i].data;
+    for j: 0..127 {
+      val: float = 0;
+      #asm SSE {
+        movups.x xmm0: vec, [buf];
+        dpps.x   xmm0, [layer2_data], 0xF1;
+        movq     val, xmm0;
+        add buf, 16;
+        add layer2_data, 16;
+      }
+      sum += val;
+    }
+    outputs[i] = sum + biases2[i];
+  }
 
-
-  return outputs;
+  // soft max  
+  return softmax(*outputs);
 }
 
 forward_propagate_cpu :: (image: [784] float) -> [10] float {
+  defer print("forward_propagate_cpu\n");
   using mnist_model;
   buffer1: [512] float;
   outputs: [10]  float;
@@ -95,28 +146,26 @@ forward_propagate_cpu :: (image: [784] float) -> [10] float {
   }
 
   // soft max  
+  return softmax(*outputs);
+}
+
+softmax :: (outputs: *[10] float) -> [10] float {
   sum : float = 0.0;
   euler : float = 2.7182818;
+  outs: [] float = <<outputs;
   for i: 0..9 {
-    outputs[i] = Math.pow(euler, outputs[i]);
-    sum += outputs[i];
+    outs[i] = Math.pow(euler, outs[i]);
+    sum += outs[i];
   }
 
   for i: 0..9 {
-    outputs[i] /= sum;
-    outputs[i] *= 100.0;
+    outs[i] /= sum;
+    outs[i] *= 100.0;
   }
- 
-  return outputs;
+  return <<outputs;
 }
 
 MNIST_Model :: struct {
-  M1 :: 784;
-  N1 :: 512;
-  N2 :: 10;
-  M1xN1 :: M1*N1;
-  N1xN2 :: N1*N2;
-
   layer1 : [512][784] float;
   biases1:      [512] float;
   layer2 :  [10][512] float;
