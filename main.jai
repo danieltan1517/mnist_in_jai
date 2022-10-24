@@ -10,7 +10,6 @@ mnist_image :: () {
   x: s32;
   y: s32;
   comp: s32;
-  //data := stbi_load("MNIST/4_1.jpg", *x, *y, *comp, 0);
   data := stbi_load("MNIST/1_3.jpg", *x, *y, *comp, 0);
   buffer: [] u8;
   buffer.data = data;
@@ -30,7 +29,6 @@ mnist_image :: () {
   results = forward_propagate_sse(image);
   t = get_time() - t;
   print("%. time taken: %\n", results, t);
-  stbi_image_free(data);
 }
 
 load_neural_network :: (file_name: string) -> bool {
@@ -59,7 +57,6 @@ compute_flag :: enum {
 }
 
 forward_propagate_sse :: (image: [784] float) -> [10] float {
-  defer print("forward_propagate_sse\n");
   using mnist_model;
   buffer1: [512] float;
   outputs: [10]  float;
@@ -119,7 +116,6 @@ forward_propagate_sse :: (image: [784] float) -> [10] float {
 }
 
 forward_propagate_cpu :: (image: [784] float) -> [10] float {
-  defer print("forward_propagate_cpu\n");
   using mnist_model;
   buffer1: [512] float;
   outputs: [10]  float;
