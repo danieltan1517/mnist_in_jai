@@ -31,7 +31,7 @@ main :: () {
 }
 
 Image :: struct {
-  picture: *simp.Texture;
+  texture: simp.Texture;
   image_data: [784] float;
 }
 
@@ -55,25 +55,33 @@ init_mnist_images :: () {
     // TODO: there should be a better way than loading the
     // same image twice.
     // NOTE: need to call simp.set_render_target before calling this function.
-    picture := New(simp.Texture);
-    success := simp.texture_load_from_file(picture, filename);
-    print("%\n", <<picture);
-    MNIST_images[index].picture = picture;
+
+
+    // Jon said to fill out a "Bitmap" struct, and then use "texture_load_from_bitmap"
+    bitmap: simp.Bitmap;
+    success := simp.bitmap_load(*bitmap, filename);
     if !success then
       return false;
-
-    x, y, comp: s32;
-    data := stbi_load(to_c_string(filename), *x, *y, *comp, 0);
-    defer stbi_image_free(data);
-    buffer: [] u8;
-    buffer.data = data;
-    buffer.count = x * y;
     image := *MNIST_images[index].image_data;
-    assert(buffer.count == 784, "Error. Image has incorrect dimensions [%1x%2].\n", x, y);
+    assert(bitmap.data.count == 784, "Error. Image has incorrect dimensions [%1x%2].\n", bitmap.width, bitmap.height);
     for i: 0..783 {
-      grey := (xx buffer[i]) / 256.0;
+      grey := (xx bitmap.data[i]) / 256.0;
       (<<image)[i] = grey;
     }
+
+    copy_data := bitmap.data;
+    defer array_free(copy_data);
+    bitmap.data = NewArray(784*3, u8);
+    for i: 0..783 {
+      byte := copy_data[i];
+      bitmap.data[i*3 + 0] = byte;
+      bitmap.data[i*3 + 1] = byte;
+      bitmap.data[i*3 + 2] = byte;
+    }
+    bitmap.format = .RGB8;
+
+    texture := *MNIST_images[index].texture;
+    success = simp.texture_load_from_bitmap(texture, *bitmap);
     return true;
   }
 }
@@ -82,7 +90,7 @@ rindex := 0;
 
 render :: (win: Window_Type, current_time: float64) #expand {
   // background.
-  simp.clear_render_target(.05, .05, .05, 1);
+  simp.clear_render_target(.10, .10, .10, 1);
   simp.immediate_begin();
   
   defer {
@@ -92,7 +100,7 @@ render :: (win: Window_Type, current_time: float64) #expand {
 
   width, height := simp.get_render_dimensions(win);
   
-  texture := MNIST_images[rindex].picture;
+  texture := *MNIST_images[rindex].texture;
   simp.set_shader_for_images(texture);
 
   color := make_vector4(1.0, 1.0, 1.0, 1.0);
