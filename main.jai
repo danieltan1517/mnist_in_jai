@@ -1,10 +1,11 @@
 main :: () {
-  win := create_window(800, 600, "Window");
+  win := create_window(800, 600, "MNIST in Jai");
   window_width, window_height := simp.get_render_dimensions(win);
   simp.set_render_target(win);
   ui_init();
   setup_getrect_theme(.Grayscale);
   init_mnist_images();
+  forward_propagate(MNIST_images[rindex].image_data);
   while eventloop := true {
     Input.update_window_events();
     for Input.get_window_resizes() {
@@ -24,11 +25,13 @@ main :: () {
     }
 
     current_time := get_time();
-    render(win, current_time);
+    render(win, window_width, window_height, current_time);
     sleep_milliseconds(10);
     reset_temporary_storage();
   }
 }
+
+#scope_file
 
 Image :: struct {
   texture: simp.Texture;
@@ -52,11 +55,6 @@ init_mnist_images :: () {
   print("loaded.\n");
 
   load_image :: (index: int, filename: string) -> bool {
-    // TODO: there should be a better way than loading the
-    // same image twice.
-    // NOTE: need to call simp.set_render_target before calling this function.
-
-
     // Jon said to fill out a "Bitmap" struct, and then use "texture_load_from_bitmap"
     bitmap: simp.Bitmap;
     success := simp.bitmap_load(*bitmap, filename);
@@ -71,7 +69,7 @@ init_mnist_images :: () {
 
     copy_data := bitmap.data;
     defer array_free(copy_data);
-    bitmap.data = NewArray(784*3, u8);
+    bitmap.data = NewArray(2352, u8); // 2352 <- 784 x 3
     for i: 0..783 {
       byte := copy_data[i];
       bitmap.data[i*3 + 0] = byte;
@@ -87,69 +85,101 @@ init_mnist_images :: () {
 }
 
 rindex := 0;
+best_guess_number := 0;
+best_probability := 0.0;
 
-render :: (win: Window_Type, current_time: float64) #expand {
+render :: (win: Window_Type, width: s32, height: s32, current_time: float64) {
   // background.
   simp.clear_render_target(.10, .10, .10, 1);
   simp.immediate_begin();
+  k := clamp(height * .05, 17.0, 30.0);
+  fwidth := cast(float) width;
+  fheight := cast(float) height;
+  cenx := fwidth / 2.0;
+  ceny := fheight / 2.0;
   
   defer {
     simp.swap_buffers(win);
     simp.immediate_flush();
   }
-
-  width, height := simp.get_render_dimensions(win);
   
   texture := *MNIST_images[rindex].texture;
   simp.set_shader_for_images(texture);
 
+  sq := min(cenx,ceny) * .95 - k - k - 7;
+
   color := make_vector4(1.0, 1.0, 1.0, 1.0);
-  
-  simp.immediate_quad(100, 100, 250, 250, color);
+  simp.immediate_quad(cenx - sq, ceny - sq, cenx + sq, ceny + sq, color);
 
   // update ui
   ui_per_frame_update(win, width, height, current_time);
-  k := clamp(height * .05, 17.0, 30.0);
-  r := get_rect(250.0, (xx height/2) - 5.0 - k, 6.5*k, k);
+  r := get_rect(cenx - sq, ceny + sq + 3.5, sq*.5, k);
   if button(r, "Previous") {
     rindex -= 1;
     if rindex < 0 then {
       rindex = 49;
     }
+    forward_propagate(MNIST_images[rindex].image_data);
   }
 
-  r.y -= k + 5.0;
+  r.x += sq*.5;
   if button(r, "Next") {
     rindex += 1;
     if rindex > 49 then {
       rindex = 0;
     }
+    forward_propagate(MNIST_images[rindex].image_data);
   }
 
-  r.y -= k + 5.0;
+  r.x += sq*.5;
   if button(r, "Random") {
     rseed ^= rseed >> 12;
     rseed ^= rseed << 25;
     rseed ^= rseed >> 27;
     rseed *= 2685821657736338717;
     rindex = Math.abs(rseed) % 50;
+    forward_propagate(MNIST_images[rindex].image_data);
+  }
+
+  r.x += sq*.5;
+  calc := calculate;
+  dropdown(r, .["sse", "cpu"], *calc);
+  r = get_rect(cenx - sq, ceny - sq - k - 3.5, sq*2, k);
+  str := tprint("%1 with %2%% Probability", best_guess_number, formatFloat(best_probability, zero_removal=.NO, trailing_width=2));
+  label(r, str, label_theme);
+
+  r.y -= k;
+  str = tprint("Execution Time: % ms", formatFloat(1000*exe_time, zero_removal=.NO,trailing_width=2));
+  label(r, str, label_theme);
+
+  r = get_rect(cenx + sq, ceny + sq - k - 3.5, sq*2, k);
+  for i: 0..9 {
+    val := probabilities[i];
+    str := tprint("%1: %2%%", i, formatFloat(val, zero_removal=.NO, trailing_width=2));
+    label(r, str, label_theme);
+    r.y -= k;
+  }
+
+  draw_popups();
+  if calc != calculate {
+    calculate = calc;
+    forward_propagate(MNIST_images[rindex].image_data);
   }
 }
 
+calculate: s32 = 0;
 rseed : int = 861097715;
 
 setup_getrect_theme :: (theme: Default_Themes) #expand {
   proc := default_theme_procs[theme];
   getrect_theme = proc();
-  button_theme := *getrect_theme.button_theme;
-  button_theme.label_theme.alignment = .Left;
-
-  slider_theme := *getrect_theme.slider_theme;
-  slider_theme.foreground.alignment = .Left;
+  label_theme = *getrect_theme.label_theme;
+  label_theme.alignment = .Left;
   set_default_theme(getrect_theme);
 }
 
-getrect_theme: Overall_Theme; 
+getrect_theme: Overall_Theme;
+label_theme: *Label_Theme;
 
 load_neural_network :: (file_name: string) -> bool {
   bytes, success := read_entire_file(file_name);
@@ -168,6 +198,27 @@ load_neural_network :: (file_name: string) -> bool {
 
   memcpy(*mnist_model, bytes.data, size_of(MNIST_Model));
   return true;
+}
+
+probabilities: [10] float;
+exe_time: float64;
+forward_propagate :: (image: [784] float) {
+  exe_time = get_time();
+  if calculate == 0 then {
+    probabilities = forward_propagate_sse(image);
+  } else if calculate == 1 then {
+    probabilities = forward_propagate_cpu(image);
+  }
+
+  best_guess_number = -1;
+  best_probability = -100.0;
+  for prob, index: probabilities {
+    if prob > best_probability {
+      best_guess_number = index;
+      best_probability = prob;
+    }
+  }
+  exe_time = get_time() - exe_time;
 }
 
 forward_propagate_sse :: (image: [784] float) -> [10] float {
@@ -284,7 +335,15 @@ MNIST_Model :: struct {
   biases2:       [10] float;
 }
 
-mnist_model: MNIST_Model;
+#no_reset mnist_model: MNIST_Model;
+#run {
+  #import "Compiler";
+  success := load_neural_network(file_name = "mnist.nn");
+  assert(success);
+  set_build_options_dc (.{
+    output_executable_name = "mnist_in_jai",
+  });
+}
 
 #import "Basic";
 #import "File";
