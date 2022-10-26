@@ -153,10 +153,15 @@ render :: (win: Window_Type, width: s32, height: s32, current_time: float64) {
   label(r, str, label_theme);
 
   r = get_rect(cenx + sq, ceny + sq - k - 3.5, sq*2, k);
+  label_color := label_theme.text_color;
   for i: 0..9 {
     val := probabilities[i];
+    if best_guess_number == i {
+      label_theme.text_color = make_vector4(1,1,1,1);
+    }
     str := tprint("%1: %2%%", i, formatFloat(val, zero_removal=.NO, trailing_width=2));
     label(r, str, label_theme);
+    label_theme.text_color = label_color;
     r.y -= k;
   }
 
@@ -355,3 +360,4 @@ simp :: #import "Simp";
 Input :: #import "Input";
 #import "Window_Creation";
 #import "GetRect";
+#import "Machine_X64";
